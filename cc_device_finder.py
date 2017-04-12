@@ -30,9 +30,17 @@ Parts of this are adapted from code found in PyChromecast - https://github.com/b
 import os
 import socket, select
 import datetime
-import urlparse
 
-import httplib, urllib
+try:
+    from urllib.parse import urlparse
+except ImportError:
+    from urlparse import urlparse
+
+try:
+    import http.client as httplib
+except ImportError:
+    import httplib
+
 from xml.etree import ElementTree
 
 import struct
@@ -77,7 +85,7 @@ def search_network_ssdp(device_limit=None, time_limit=5):
                        'ST: urn:dial-multiscreen-org:service:dial:1',
                        '',''])
                        
-    sock.sendto(req, ("239.255.255.250", 1900))
+    sock.sendto(req.encode(), ("239.255.255.250", 1900))
 
 
     while True:
@@ -90,13 +98,13 @@ def search_network_ssdp(device_limit=None, time_limit=5):
         if sock in readable:
             st, addr = None, None
             
-            data = sock.recv(1024)
+            data = sock.recv(1024).decode()
 
             for line in data.split("\r\n"):
                 line = line.replace(" ", "")
             
                 if line.upper().startswith("LOCATION:"):
-                    addr = urlparse.urlparse(line[9:].strip()).hostname
+                    addr = urlparse(line[9:].strip()).hostname
                 
                 elif line.upper().startswith("ST:"):
                     st = line[3:].strip()
@@ -124,17 +132,18 @@ def search_network_mdns(device_limit=None, time_limit=5):
  
     
     # build query
-    query_format = "\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00%s\x00\x00\x0c\x00\x01"
+    query_format_part1 = b"\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+    query_format_part2 = b"\x00\x00\x0c\x00\x01"
     
-    service_type = "_googlecast._tcp.local."
+    service_type = b"_googlecast._tcp.local."
     
-    query_data = ""
-    for query_part in service_type.split("."):
+    query_data = b""
+    for query_part in service_type.split(b"."):
         if len(query_part) > 0:
             query_data += struct.pack("b", len(query_part)) + query_part
             
     
-    query = query_format % query_data
+    query = query_format_part1 + query_data + query_format_part2
     
     
     # setup multicast socket    
@@ -154,20 +163,20 @@ def search_network_mdns(device_limit=None, time_limit=5):
 
 
     try:
-        print "Sending mDNS query"
-        sock.sendto(query, 0, (m_addr, m_port))    
+        print("Sending mDNS query")
+        sock.sendto(query, 0, (m_addr, m_port))
 
         while True:
             try:
                 data, addr = sock.recvfrom(1024)
                 
                 # TODO parse the response properly, but for now this should identify chromecast responses
-                if query_data in data and "md=Chromecast" in data and addr[0] not in addrs:
-                    print "chromecast found:", addr[0]
+                if query_data in data and b"md=Chromecast" in data and addr[0] not in addrs:
+                    print("chromecast found:" + addr[0])
                     addrs.append(addr[0])
                     
                     if device_limit and len(addrs) == device_limit:
-                        print "enough devices found"
+                        print("enough devices found")
                         break                    
                                     
             except socket.timeout:
@@ -189,7 +198,7 @@ def get_device_name(ip_addr):
         resp = conn.getresponse()  
 
         if resp.status == 200:
-            status_doc = resp.read()   
+            status_doc = resp.read().decode()
             message = json.loads(status_doc) 
 
             return message['name']                         
@@ -239,7 +248,7 @@ def check_cache(name):
                         if name == hostname:
                             # name is found - check that the host responds with the same name
                             device_name = get_device_name(host)
-                            print "Device name response:", device_name
+                            print("Device name response: " + device_name)
                             if name == device_name and device_name != "":
                                 result = host
                                 break
@@ -255,7 +264,7 @@ def save_cache(host_map):
     
     filepath = os.path.expanduser(CACHE_FILE)
     with open(filepath, "w") as f:
-        for key in host_map.keys():
+        for key in host_map:
             if len(key) > 0 and len(host_map[key]) > 0:
                 # file format: hostname[tab]ip_addr
                 f.write(key + "\t" + host_map[key] + "\n")
@@ -267,7 +276,7 @@ def find_device(name=None, time_limit=6):
     
     if name is None or name == "":
         # no name specified so find the first device that responds
-        print "searching the network for a Chromecast device"
+        print("searching the network for a Chromecast device")
         hosts = search_network(device_limit=1)
         if len(hosts) > 0:
             return hosts[0], get_device_name(hosts[0])
@@ -278,11 +287,11 @@ def find_device(name=None, time_limit=6):
         ip_addr = check_cache(name)
         if ip_addr is not None:
             # address found in cache
-            print "found device in cache:", name
+            print("found device in cache: " + name)
             return ip_addr, name
         else:
             # no cached results found run a full network search
-            print "searching the network for:", name
+            print("searching the network for: " + name)
             result_map = {}
             
             hosts = search_network(time_limit=time_limit)
@@ -292,9 +301,9 @@ def find_device(name=None, time_limit=6):
                     result_map[device_name] = host
                 
             save_cache(result_map)
-            
-            if name in result_map.keys():
-                print "found device:", name
+
+            if name in result_map:
+                print("found device: " + name)
                 return result_map[name], name
             else:
                 return None, None
